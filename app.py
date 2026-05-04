@@ -1,101 +1,90 @@
 import streamlit as st
-import fitz  # PyMuPDF
-from PIL import Image
+import fitz
+from PIL import Image, ImageOps, ImageEnhance
 import io
 import re
+import numpy as np
+import cv2 # لإضافة المعالجة الرقمية القوية
+import easyocr
 
-st.set_page_config(page_title="مكتبة 313 - النسخ الدقيق", layout="centered")
+st.set_page_config(page_title="مكتبة 313 - النسخة الأسطورية", layout="centered")
 
-st.markdown("""
-    <style>
-    .stButton>button { border-radius: 20px; font-weight: bold; background-color: #1b5e20; color: white; height: 3.5em; }
-    .stTextArea>div>div>textarea { font-size: 22px !important; direction: rtl; border: 2px solid #1b5e20; background-color: #fcfcfc; }
-    </style>
-    """, unsafe_allow_html=True)
+@st.cache_resource
+def load_ocr():
+    return easyocr.Reader(['ar'])
 
-st.title("📚 مكتبة 313 - نظام النسخ الذكي")
+reader = load_ocr()
+
+st.title("📚 مكتبة 313 - الحل النهائي والأقوى")
 
 if "library" not in st.session_state:
     st.session_state.library = {}
 
 with st.sidebar:
-    st.header("إدارة المكتبة")
-    new_files = st.file_uploader("ارفع كتب PDF", type="pdf", accept_multiple_files=True)
-    if new_files:
-        for f in new_files:
+    st.header("المخزن")
+    files = st.file_uploader("ارفع كتب PDF", type="pdf", accept_multiple_files=True)
+    if files:
+        for f in files:
             if f.name not in st.session_state.library:
                 st.session_state.library[f.name] = f.getvalue()
-    
-    all_books = list(st.session_state.library.keys())
-    selected_book = st.selectbox("📖 اختر الكتاب:", all_books) if all_books else None
+    selected_book = st.selectbox("اختر كتابك:", list(st.session_state.library.keys())) if st.session_state.library else None
 
 if selected_book:
     doc = fitz.open(stream=st.session_state.library[selected_book], filetype="pdf")
-    page_key = f"page_{selected_book}"
-    if page_key not in st.session_state:
-        st.session_state[page_key] = 0
-
-    current_idx = st.session_state[page_key]
-    page = doc.load_page(current_idx)
+    p_key = f"p_{selected_book}"
+    if p_key not in st.session_state: st.session_state[p_key] = 0
     
-    # تحسين جودة الصورة لضمان مطابقة النص
-    zoom = 2
-    mat = fitz.Matrix(zoom, zoom)
-    pix = page.get_pixmap(matrix=mat)
+    idx = st.session_state[p_key]
+    page = doc.load_page(idx)
+    
+    # تحويل الصفحة لصورة بجودة 300 DPI
+    pix = page.get_pixmap(matrix=fitz.Matrix(3, 3))
     img = Image.open(io.BytesIO(pix.tobytes("png")))
     
     st.image(img, use_container_width=True)
 
-    # --- التنقل ---
-    st.write(f"<p style='text-align:center;'>الصفحة {current_idx + 1} من {doc.page_count}</p>", unsafe_allow_html=True)
-    
-    col_p, col_n = st.columns(2)
-    with col_p:
+    # أزرار التنقل السفلية
+    st.write(f"<p style='text-align:center;'>الصفحة {idx + 1} من {doc.page_count}</p>", unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    with c1:
         if st.button("⬅️ السابقة", use_container_width=True):
-            if current_idx > 0:
-                st.session_state[page_key] -= 1
-                st.rerun()
-    with col_n:
+            if idx > 0: st.session_state[p_key] -= 1; st.rerun()
+    with c2:
         if st.button("التالية ➡️", use_container_width=True):
-            if current_idx < doc.page_count - 1:
-                st.session_state[page_key] += 1
-                st.rerun()
+            if idx < doc.page_count - 1: st.session_state[p_key] += 1; st.rerun()
 
     st.divider()
-    
-    # --- نظام النسخ الجزئي المطور ---
-    st.subheader("🎯 حدد السطر المطلوب نسخه بدقة")
-    
-    # استخدام قيم افتراضية أصغر للقص لتسهيل التحديد
-    t_val = st.slider("بداية السطر (%)", 0, 99, 45, key="t_v20")
-    b_val = st.slider("نهاية السطر (%)", t_val + 1, 100, t_val + 5, key="b_v20")
 
-    if st.button("✨ تنفيذ النسخ الجزئي"):
-        try:
-            # 1. عرض صورة القص للتأكد بصرياً
-            w, h = img.size
-            y0_img, y1_img = (t_val/100)*h, (b_val/100)*h
-            crop = img.crop((0, y0_img, w, y1_img))
-            st.image(crop, caption="هذا هو الجزء الذي سيتم تحويله لنص")
-            
-            # 2. استخراج النص باستخدام نظام "الكتل" (Blocks) لضمان الدقة
-            # نقوم بحساب المنطقة في الـ PDF بناءً على النسب المئوية للسلايدر تماماً
-            rect = fitz.Rect(0, (t_val/100)*page.rect.height, page.rect.width, (b_val/100)*page.rect.height)
-            
-            # استخراج النص من داخل هذا المستطيل حصراً
-            text_parts = page.get_textbox(rect)
-            
-            # تنظيف النص
-            clean_text = re.sub(r'[\u064B-\u0652\u0670]', '', text_parts).strip()
-            
-            if clean_text:
-                st.success("تم النسخ بنجاح:")
-                st.text_area("النص الجاهز:", value=clean_text, height=150)
-            else:
-                st.warning("لم يتم العثور على نص رقمي. إذا كان الكتاب (سكنر/صور)، يرجى التأكد من وضوح النص.")
+    st.subheader("🎯 منطقة النسخ العميقة")
+    t_v = st.slider("من الأعلى (%)", 0, 95, 45)
+    b_v = st.slider("إلى الأسفل (%)", t_v + 1, 100, t_v + 10)
+
+    # مقص المعاينة
+    w, h = img.size
+    crop = img.crop((0, (t_v/100)*h, w, (b_v/100)*h))
+    
+    # --- المعالجة الرقمية (السر الحقيقي للقوة) ---
+    # تحويل الصورة إلى OpenCV لعمل سحر المعالجة
+    open_cv_image = np.array(crop.convert('RGB'))
+    gray = cv2.cvtColor(open_cv_image, cv2.COLOR_RGB2GRAY) # تحويل لرمادي
+    # تصفية الضوضاء وزيادة حدة الحروف (Thresholding)
+    processed_img = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+    
+    st.image(processed_img, caption="هكذا يرى الذكاء الاصطناعي النص الآن (أوضح وأدق)")
+
+    if st.button("🚀 تنفيذ أقوى نسخ مجاني"):
+        with st.spinner("جاري التحليل العميق..."):
+            try:
+                # القراءة من الصورة المعالجة رقمياً
+                results = reader.readtext(processed_img, detail=0)
+                clean = re.sub(r'[\u064B-\u0652\u0670]', '', " ".join(results)).strip()
                 
-        except Exception as e:
-            st.error("حدث خطأ في المطابقة، يرجى إعادة المحاولة.")
-
+                if clean:
+                    st.success("تم النسخ بنجاح!")
+                    st.text_area("النص المستخرج:", value=clean, height=180)
+                else:
+                    st.warning("لم نتمكن من القراءة، جرب تعديل منطقة القص.")
+            except Exception as e:
+                st.error(f"حدث خطأ: {str(e)}")
 else:
-    st.info("ارفع ملفاتك من القائمة الجانبية.")
+    st.info("ارفع كتبك للبدء.")
